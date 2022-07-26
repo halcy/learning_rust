@@ -121,8 +121,8 @@ gen_basic_ops!(Mat4x4 16);
 // Test this
 fn main() {
     let vec_a = Vec2::new(2.0, 3.0);
-    let mat_a = Mat2x3{ 0: VecN::<6>{ v: [0.0, 0.0, 0.0, 0.0, 1.0, 1.0] } };
-    let mat_b = Mat2x3{ 0: VecN::<6>{ v: [0.0, 0.0, 0.0, 0.0, 1.0, 1.0] } };
+    let mat_a = Mat2x3::new(0.0, 0.0, 0.0, 0.0, 1.0, 1.0);
+    let mat_b = Mat2x3::new(0.0, 0.0, 0.0, 0.0, 1.0, 1.0);
     let mat_c = mat_a + mat_b;
     println!("{}", mat_c.0.v[5]);
     println!("{}", (vec_a * 3.0).xy().u());
