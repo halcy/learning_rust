@@ -4,9 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-auto_ops = "0.3.0"
-combinations = "0.1.0"
-gen_ops = "0.1.2"
-itertools = "0.10.3"
-seq-macro = "0.3.0"
-swizz_macro = { path = "swizz_macro" }
+vector_math = { path = "vector_math" }

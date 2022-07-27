@@ -24,13 +24,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quickmaths"
-version = "0.1.0"
-dependencies = [
- "vector_math",
-]
-
-[[package]]
 name = "vector_macro"
 version = "0.1.0"
 dependencies = [
