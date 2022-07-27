@@ -7,3 +7,4 @@ edition = "2021"
 vector_math = { path = "vector_math" }
 image_buffer = { path = "image_buffer" }
 packed_struct = "0.10.0"
+rand = "0.8.5"

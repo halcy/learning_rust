@@ -8,7 +8,7 @@ use std::format;
 pub fn gen_swizz(input: TokenStream) -> TokenStream {
     let in_str = input.into_iter().next().unwrap().to_string();
     let mut out_src = "".to_string();
-    out_src.push_str(&"pub fn ");
+    out_src.push_str(&"#[inline(always)] pub fn ");
     out_src.push_str(&in_str);
     if in_str.chars().count() == 1 {
         out_src.push_str(&"(&self) -> Scalar { return ");
@@ -48,7 +48,7 @@ pub fn gen_swizz(input: TokenStream) -> TokenStream {
 pub fn gen_swizz_assign(input: TokenStream) -> TokenStream {
     let in_str = input.into_iter().next().unwrap().to_string();
     let mut out_src = "".to_string();
-    out_src.push_str(&"pub fn set_");
+    out_src.push_str(&"#[inline(always)] pub fn set_");
     out_src.push_str(&in_str);
     if in_str.chars().count() == 1 {
         out_src.push_str(&"(&mut self, v: Scalar) {");
@@ -114,7 +114,7 @@ pub fn gen_swizz_funcs(input: TokenStream) -> TokenStream {
 pub fn gen_constructor(input: TokenStream) -> TokenStream {
     let num_elements = input.into_iter().next().unwrap().to_string().parse::<i32>().unwrap();
     let mut out_src = "".to_string();
-    out_src.push_str(&"pub fn new(");
+    out_src.push_str(&"#[inline(always)] pub fn new(");
     for element in 0..num_elements {
         out_src.push_str(&"v");
         out_src.push_str(&element.to_string());    
@@ -232,11 +232,11 @@ pub fn gen_basic_ops(input: TokenStream) -> TokenStream {
 pub fn gen_mat_access(input: TokenStream) -> TokenStream {
     let num_cols = input.into_iter().next().unwrap().to_string().parse::<i32>().unwrap();
     return format!("
-        pub fn m(&self, row: usize, col: usize) -> Scalar {{
+        #[inline(always)] pub fn m(&self, row: usize, col: usize) -> Scalar {{
             return self.0.v[row * {0} + col];
         }}
 
-        pub fn set_m(&mut self, row: usize, col: usize, to: Scalar) {{
+        #[inline(always)] pub fn set_m(&mut self, row: usize, col: usize, to: Scalar) {{
             self.0.v[row * {0} + col] = to;
         }}
     ", num_cols).parse().unwrap();
@@ -327,7 +327,7 @@ pub fn gen_mat_mul(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
-pub fn gen_dot(input: TokenStream) -> TokenStream {
+pub fn gen_dot_norm(input: TokenStream) -> TokenStream {
     let mut input_iter = input.into_iter();
     let this_type = input_iter.next().unwrap().to_string();
     let num_elements = input_iter.next().unwrap().to_string().parse::<i32>().unwrap();
@@ -340,5 +340,18 @@ pub fn gen_dot(input: TokenStream) -> TokenStream {
         }
     }
     out_src.push_str(&format!("; }} }} impl_op_ex!(& |a: {0}, b: {0}| -> Scalar {{ return a.dot(b); }});", this_type));
+    out_src.push_str(&format!("
+    impl {0} {{
+        #[inline(always)]
+        pub fn length(&self) -> Scalar {{
+            return (*self).dot(*self).sqrt();
+        }}
+        
+        #[inline(always)]
+        pub fn normalized(&self) -> {0} {{
+            return *self / self.length();
+        }}
+    }}
+    ", this_type));
     return out_src.parse().unwrap();
 }

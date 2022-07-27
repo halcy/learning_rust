@@ -4,9 +4,8 @@ use vector_math::{*};
 use std::vec;
 use std::fs::File;
 use std::io::prelude::*;
-use std::slice;
 
-pub type Color = Vec4;
+pub type Color = Vec3;
 
 pub struct ImageBuffer {
     width: usize,
@@ -35,15 +34,30 @@ pub struct BMPHeader {
 	important_colors: u32, // 0
 }
 
-
 impl ImageBuffer {
     pub fn new(width: usize, height: usize) -> ImageBuffer {
-        let default_col = Color::new(0.0, 0.0, 0.0, 0.0);
+        let default_col = Color::new(0.0, 0.5, 0.0);
         return ImageBuffer {
             width: width,
             height: height,
             data: vec![default_col; width * height]
         }
+    }
+
+    #[inline(always)]
+    fn pixel_index(&self, x: usize, y: usize) -> usize{
+        return (self.height - y - 1) * self.width + x;
+    }
+
+    #[inline]
+    pub fn set_pixel(&mut self, x: usize, y: usize, c: Color) {
+        let index = self.pixel_index(x, y);
+        self.data[index] = c;
+    }
+
+    #[inline]
+    pub fn pixel(&self, x: usize, y: usize) -> Color {
+        return self.data[self.pixel_index(x, y)];
     }
 
     pub fn write_bmp(&self, path: &str) {
@@ -67,28 +81,25 @@ impl ImageBuffer {
         };
         let header_packed = header.pack().expect("Header packing error");
         let mut f = File::create(path).expect("Could not open file");
-        f.write_all(&header_packed);
+        f.write_all(&header_packed).expect("Write error");
 
         let mut line_pos = 0;
         let line_max = self.width * 3;
 
+        let mut pixel_stream = Vec::new();
         for pixel in &self.data {
-            let b: u8 = (pixel.b() * 255.0) as u8;
-            f.write(slice::from_ref(&b));
-            let g: u8 = (pixel.g() * 255.0) as u8;
-            f.write(slice::from_ref(&g));
-            let r: u8 = (pixel.r() * 255.0) as u8;
-            f.write(slice::from_ref(&r));
+            pixel_stream.push((pixel.b() * 255.0) as u8);
+            pixel_stream.push((pixel.g() * 255.0) as u8);
+            pixel_stream.push((pixel.r() * 255.0) as u8);
 
-        }
-
-	    line_pos += 3;
-        if line_pos == line_max {
-            while line_pos < line_max + line_max % 4 {
-                let fill: u8 = 0;
-                f.write(slice::from_ref(&fill));
+            line_pos += 3;
+            if line_pos == line_max {
+                while line_pos < line_max + line_max % 4 {
+                    pixel_stream.push(0 as u8);
+                }
+                line_pos = 0;
             }
-            line_pos = 0;
         }
+        f.write_all(&pixel_stream).expect("Write error");
     }
 }

@@ -231,17 +231,17 @@ gen_mat_mul!(Mat4x4 Mat4x3 Mat4x3 4 4 3);
 gen_mat_mul!(Mat4x4 Mat4x4 Mat4x4 4 4 4);
 
 // Dot products
-gen_dot!(Vec2 2);
-gen_dot!(Vec3 3);
-gen_dot!(Vec4 4);
+gen_dot_norm!(Vec2 2);
+gen_dot_norm!(Vec3 3);
+gen_dot_norm!(Vec4 4);
 
 // Cross product
 impl Vec3 {
     pub fn cross(&self, b: Vec3) -> Vec3 {
         return Vec3::new(
-            self.y() * b.z() - self.z() - b.y(),
-            self.z() * b.x() - self.x() - b.z(),
-            self.x() * b.y() - self.y() - b.x(),
+            self.y() * b.z() - self.z() * b.y(),
+            self.z() * b.x() - self.x() * b.z(),
+            self.x() * b.y() - self.y() * b.x(),
         )
     }
 }
