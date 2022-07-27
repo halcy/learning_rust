@@ -1,4 +1,5 @@
 use vector_math::{*};
+use image_buffer::ImageBuffer;
 
 fn main() {
     /*
@@ -38,5 +39,8 @@ fn main() {
     vec_c |= mat_d;
     println!("{}", vec_c);
     */
+
+    let buffer = ImageBuffer::new(640, 480);
+    buffer.write_bmp("test.bmp");
 }
 

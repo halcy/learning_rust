@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 vector_math = { path = "vector_math" }
+image_buffer = { path = "image_buffer" }
+packed_struct = "0.10.0"
