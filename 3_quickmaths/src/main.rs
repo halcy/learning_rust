@@ -3,6 +3,11 @@ use image_buffer::{ImageBuffer, Color};
 use std::f32::consts::PI;
 use std::process::Command;
 use rand::Rng;
+use crossbeam;
+use clap::{Parser};
+use obj_reader::{*};
+use lazy_static::lazy_static;
+use std::time::{SystemTime};
 
 fn sample_unit() -> f32 {
     let mut rng = rand::thread_rng();
@@ -31,18 +36,31 @@ fn sample_hemisphere_weighted(towards: Vec3, weight: Scalar) -> Vec3 {
 
 // Shove point in direction, to avoid speckles
 fn displace(v: Vec3, towards: Vec3) -> Vec3 {
-    return v + towards * 0.00001; // TODO const this out
+    return v + towards * 0.0001;
 }
 
 trait Object {
-    fn intersect(&self, o: Vec3, r: Vec3) -> Option<Scalar>;
-    fn shade(&self, r: Vec3, p: Vec3, cont_prob: f32) -> Color;
+    fn intersect(&self, o: Vec3, r: Vec3) -> Option<Hit>;
+    fn shade(&self, h: Hit, cont_prob: f32) -> Color;
+    fn get_bvh_skip(&self) -> i32;
 }
 
 struct Sphere {
     c: Vec3,
     r: Scalar,
     bsdf: BSDF,
+    bvh_skip: i32,
+}
+
+struct Triangle {
+    p1: Vec3,
+    p2: Vec3,
+    p3: Vec3,
+    n1: Vec3,
+    n2: Vec3,
+    n3: Vec3,
+    bsdf: BSDF,
+    bvh_skip: i32,
 }
 
 struct BSDF {
@@ -53,11 +71,56 @@ struct BSDF {
     transmittance: Scalar,
 }
 
+#[derive(Clone, Copy)]
+struct Hit {
+    o: Vec3,
+    d: Vec3,
+    dist: Scalar,
+    q: Option<Vec3>,
+    n: Option<Vec3>,
+}
+
 impl BSDF {
-    fn shade(&self, d: Vec3, p: Vec3, n: Vec3, cont_prob: f32) -> Color {
+    fn calc_refraction(d: Vec3, n: Vec3, r_inside: Scalar, r_outside: Scalar) -> Vec3 {
+        // Figure out whether we're going in or out and flip things accordingly
+        let mut theta1 = -(d & n);
+        let rr1 = r_inside;
+        let rr2 = r_outside;
+        let mut rn = n;
+        if theta1 < 0.0 {
+            rn = -rn;
+            theta1 = -(d & rn);
+        }
+        
+        // Figure out whether we have total internal reflection
+        let r = rr1 / rr2;
+        let theta2 = (1.0 - (r * r) * (1.0 - theta1 * theta1)).sqrt();
+        if theta2 < 0.0 {
+            return (d - rn * (d & rn) * 2.0).normalized();
+        }
+          
+        // Figure out what the Fresnel equations say about what happens next
+        let rs = (rr1 * theta1 - rr2 * theta2) / (rr1 * theta1 + rr2 * theta2);
+        let rs = rs * rs;
+        let rp = (rr1 * theta2 - rr2 * theta1) / (rr1 * theta2 + rr2 * theta1);
+        let rp = rp * rp;
+        let rr = (rs + rp) / 2.0;
+        
+        // Choose to either refract or reflect, based on fresnel coefficient
+        if sample_unit() > rr {
+            // Refract
+            return (r * d + (r * theta1 - theta2) * rn).normalized();
+        }
+        else {
+            // Reflect
+            return (d + 2.0 * theta1 * rn).normalized();
+        }
+    }
+
+    fn shade(&self, d: Vec3, q: Vec3, n: Vec3, cont_prob: f32) -> Color {
         let mut in_radiance = Vec3::new(0.0, 0.0, 0.0);
         if sample_unit() < cont_prob {
-            let mut ray_out = Vec3::new(0.0, 0.0, 0.0);
+            let ray_out;
             if sample_unit() > self.reflectivity {
                 // Generate diffuse ray
                 ray_out = sample_hemisphere_uniform(n).normalized();
@@ -66,10 +129,16 @@ impl BSDF {
                 // Generate specular ray for reflection or transmission
                 let axis = sample_hemisphere_weighted(n, self.specularity).normalized();
 
-                // For now, ignore transmission (TODO)
-                ray_out = (d - axis * (d & axis) * 2.0).normalized();
+                // Reflect or transmit
+                if sample_unit() > self.transmittance {
+                    ray_out = (d - axis * (d & axis) * 2.0).normalized();
+                }
+                else {
+                    // We assume that all objects float in air. could also keep track of RI in hit struct but lazy
+                    ray_out = Self::calc_refraction(d, axis, 1.0, 1.5); 
+                }
             }
-            let new_origin = displace(p, ray_out);
+            let new_origin = displace(q, ray_out);
             let new_prob = cont_prob * 0.95;
             in_radiance = trace(new_origin, ray_out, new_prob);
         }
@@ -78,7 +147,7 @@ impl BSDF {
 }
 
 impl Object for Sphere {
-    fn intersect(&self, o: Vec3, d: Vec3) -> Option<Scalar> {
+    fn intersect(&self, o: Vec3, d: Vec3) -> Option<Hit> {
         let o_to_c = self.c - o; 
         let proj_dist = o_to_c & d; 
         let center_dist_sq = (o_to_c & o_to_c) - proj_dist.powf(2.0);
@@ -98,42 +167,138 @@ impl Object for Sphere {
                 return None;
             }
         } 
-        return Some(hit_dist_close);
+        let hit = Hit {
+            o: o,
+            d: d,
+            dist: hit_dist_close,
+            q: None,
+            n: None,
+        };
+        return Some(hit);
     }
 
-    fn shade(&self, r: Vec3, p: Vec3, cont_prob: f32) -> Color {
-        let n = (p - self.c).normalized();
-        return self.bsdf.shade(r, p, n, cont_prob);
+    fn shade(&self, h: Hit, cont_prob: f32) -> Color {
+        let q = h.o + h.d * h.dist;
+        let n = (q - self.c).normalized();
+        return self.bsdf.shade(h.d, q, n, cont_prob);
+    }
+
+    fn get_bvh_skip(&self) -> i32 {
+        return self.bvh_skip;
+    }
+}
+
+impl Object for Triangle {
+    fn intersect(&self, o: Vec3, d: Vec3) -> Option<Hit> {
+        let a = self.p1;
+        let b = self.p2;
+        let c = self.p3;
+
+        // Figure out triangle plane
+        let triangle_ab = b - a;
+        let triangle_ac = c - a;
+        let triangle_nn = triangle_ab.cross(triangle_ac);
+        let triangle_n = (triangle_nn).normalized();
+        let triangle_support = a & triangle_n;
+
+	    // Compute intersection distance, bail if (close to) infinite or negative
+        let intersection_det = triangle_n & d;
+        if intersection_det.abs() <= 0.00001 {
+            return None;
+        }
+        let intersection_dist = (triangle_support - (triangle_n & o)) / intersection_det;
+        if intersection_dist <= 0.0 {
+            return None;
+        }
+
+        // Compute intersection point
+        let  q = o + d * intersection_dist;
+
+        // Test inside-ness
+        let triangle_bc = c - b;
+        let triangle_ca = a - c;
+        let triangle_aq = q - a;
+        let triangle_bq = q - b;
+        let triangle_cq = q - c;
+
+        let mut bary_a = triangle_bc.cross(triangle_bq) & triangle_n;
+        let mut bary_b = triangle_ca.cross(triangle_cq) & triangle_n;
+        let mut bary_c = triangle_ab.cross(triangle_aq) & triangle_n;
+
+        // Bail if on plane but outside
+        if bary_a < 0.0 || bary_b < 0.0 || bary_c < 0.0 {
+            return None;
+        }
+
+        // Perform barycentric interpolation of normals
+        let triangle_den = triangle_nn & triangle_n;
+        bary_a /= triangle_den;
+        bary_b /= triangle_den;
+        bary_c /= triangle_den;
+        let n = (self.n1 * bary_a + self.n2 * bary_b + self.n3 * bary_c).normalized();
+
+        let hit = Hit {
+            o: o,
+            d: d,
+            dist: intersection_dist,
+            q: Some(q),
+            n: Some(n),
+        };
+        return Some(hit);
+    }
+
+    fn shade(&self, h: Hit, cont_prob: f32) -> Color {
+        return self.bsdf.shade(h.d, h.q.unwrap(), h.n.unwrap(), cont_prob);
+    }
+
+    fn get_bvh_skip(&self) -> i32 {
+        return self.bvh_skip;
     }
 }
 
 fn trace(origin: Vec3, ray: Vec3, cont_prob: f32) -> Color {
     // Do the tracing
     let mut best_object: Option<&Box<dyn Object>> = None;
-    let mut best_dist: Scalar = f32::INFINITY;
-    unsafe {
-        for obj in SCENE.iter() {
+    let mut best_hit = Hit{
+        o: origin,
+        d: ray,
+        dist: f32::INFINITY,
+        n: None,
+        q: None,
+    };
+    
+    let mut bvh_skip = 0;
+    for obj in unsafe { SCENE.iter() } {
+        if bvh_skip > 0 {
+            bvh_skip -= 1;
+        }
+        else {
             let intersect = obj.intersect(origin, ray);
             if !intersect.is_none() {
-                let dist = intersect.unwrap();
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_object = Some(&obj);
+                if obj.get_bvh_skip() == 0 {
+                    let hit = intersect.unwrap();
+                    if hit.dist < best_hit.dist {
+                        best_hit = hit;
+                        best_object = Some(&obj);
+                    }
                 }
+            }
+            else {
+                bvh_skip = obj.get_bvh_skip();
             }
         }
     }
     
     // Now, shade (possibly recurse)
-    let mut col = Color::new(0.01, 0.01, 0.01);
+    let mut col = Color::new(0.2, 0.2, 0.2) * (ray & Vec3::new(0.0, 0.0, 1.0)).powf(4.0);
     if !best_object.is_none() {
         let best_object = best_object.unwrap();
-        col = best_object.shade(ray, origin + ray * best_dist, cont_prob)
+        col = best_object.shade(best_hit, cont_prob)
     }
     return col;
 }
 
-fn pixel_col(pos: Vec2, t: Scalar) -> Color {
+fn pixel_col(pos: Vec2) -> Color {
     // Define cam
     let origin = Vec3::new(0.0, 0.0, -6.0);
     let look_at = Vec3::new(0.0, 0.0, -5.0);
@@ -148,6 +313,11 @@ fn pixel_col(pos: Vec2, t: Scalar) -> Color {
     return trace(origin, ray, 1.0);
 }
 
+// Load icosahedron object
+lazy_static! {
+    static ref ICOSAHEDRON: Vec<TriData> = read_obj("icosa.obj");
+}
+
 // Update scene stored in SCENE variable
 static mut SCENE: Vec<Box<dyn Object>> = Vec::<Box<dyn Object>>::new();
 fn set_scene(t: Scalar) {
@@ -159,8 +329,8 @@ fn set_scene(t: Scalar) {
         let i_obj = (obj_idx as Scalar / 9.0) * PI * 2.0;
         let bsdf = BSDF{
             albedo: Color::new(1.0, 1.0, 1.0),
-            emission: Color::new(i_obj.sin() / 2.0 + 0.5, 0.0, i_obj.cos() / 2.0 + 0.5),
-            specularity: 10.0,
+            emission: Color::new(i_obj.sin() / 2.0 + 0.5, 0.0, i_obj.cos() / 2.0 + 0.5) * 10.0,
+            specularity: 25.0,
             reflectivity: 0.3,
             transmittance: 0.0,
         };
@@ -168,64 +338,172 @@ fn set_scene(t: Scalar) {
             SCENE.push(Box::new(Sphere{ 
                 c: Vec3::new(
                     t_obj.sin(), 
-                    -(t_obj + PI/8.0).cos() / 2.0 - 0.25, 
+                    -(t_obj + PI/8.0).cos() / 2.0 - 0.21, 
                     t_obj.cos() / 2.0
                 ) * 3.5, 
                 r: 0.8,
-                bsdf: bsdf
+                bsdf: bsdf,
+                bvh_skip: 0,
             }));
         }
 
+        let emit_ramp = ((0.1 - (t % 0.25)).max(0.0) / 0.1).powf(5.0);
+        let icosa_shift: Vec3 = Vec3::new(0.0, -0.25 + (t * 2.0 * PI).cos() * 2.0, 0.0);
         unsafe {
             SCENE.push(Box::new(Sphere{ 
-                c: Vec3::new(0.0, -0.25, 0.0),
-                r: 1.2,
+                c: icosa_shift,
+                r: 2.4,
                 bsdf: BSDF{
                     albedo: Color::new(1.0, 1.0, 1.0),
-                    emission: Color::new(1.0, 1.0, 1.0),
-                    specularity: 0.0,
-                    reflectivity: 0.0,
-                    transmittance: 0.0,
+                    emission: Color::new(2.0, 2.0, 2.0) * emit_ramp,
+                    specularity: 40.0,
+                    reflectivity: 1.0 - emit_ramp * 0.8,
+                    transmittance: 1.0,
                 },
+                bvh_skip: 180,
             }));
+        }
+
+        let icosa_scale: Scalar = 1.8;
+        let icosa_rot: Mat3x3 = Mat3x3::new(
+             (t * 2.0 * PI).cos(), 0.0, (t * 2.0 * PI).sin(),
+             0.0, 1.0, 0.0,
+            -(t * 2.0 * PI).sin(), 0.0, (t * 2.0 * PI).cos(),
+        );
+        unsafe {
+            for tri_data in ICOSAHEDRON.iter() {
+                SCENE.push(Box::new(Triangle{ 
+                    p1: (tri_data.p[0] * icosa_scale + icosa_shift) | icosa_rot,
+                    p2: (tri_data.p[1] * icosa_scale + icosa_shift) | icosa_rot,
+                    p3: (tri_data.p[2] * icosa_scale + icosa_shift) | icosa_rot,
+                    n1: tri_data.n[0],
+                    n2: tri_data.n[1],
+                    n3: tri_data.n[2],
+                    bsdf: BSDF{
+                        albedo: Color::new(1.0, 1.0, 1.0),
+                        emission: Color::new(2.0, 2.0, 2.0) * emit_ramp,
+                        specularity: 40.0,
+                        reflectivity: 1.0 - emit_ramp * 0.8,
+                        transmittance: 1.0,
+                    },
+                    bvh_skip: 0,
+                }));
+            }
+        }
+    }
+}
+// Thread render worker
+fn render_slice(mut sub_buffer: ImageBuffer, samples_per_pixel: usize, full_height: usize) {
+    let half_width = sub_buffer.width as Scalar / 2.0;
+    let inv_aspect = full_height as Scalar / sub_buffer.width as Scalar;
+    let pixel_size = Vec2::new(1.0 / sub_buffer.width as Scalar, 1.0 / full_height as Scalar);
+
+    for y_buffer in 0..sub_buffer.height {
+        let y = y_buffer + sub_buffer.first_line;
+        for x in 0..sub_buffer.width {
+            let mut pixel_accumulator = Vec3::new(0.0, 0.0, 0.0);
+            for _ in 0..samples_per_pixel {
+                let screenspace_pos = Vec2::new(
+                    x as Scalar / half_width - 1.0 + (pixel_size.x() * (sample_unit() - 0.5)), 
+                    y as Scalar / half_width - inv_aspect + (pixel_size.y() * (sample_unit() - 0.5))
+                );
+                pixel_accumulator += pixel_col(screenspace_pos);
+            }
+            sub_buffer.set_pixel(x, y_buffer, pixel_accumulator / samples_per_pixel as Scalar);
         }
     }
 }
 
+#[derive(Parser)]
+#[clap(name = "TinyRustPT")]
+#[clap(author = "Lorenz Diener <lorenzd@gmail.com>")]
+#[clap(version = "0.1.0")]
+#[clap(about = "Traces paths a bunch, using Rust!", long_about = None)]
+struct Args {
+    /// Output image width
+    #[clap(short, long, value_parser, default_value_t = 640)]
+    width: usize,
+
+    /// Output image height
+    #[clap(short, long, value_parser, default_value_t = 480)]
+    height: usize,
+
+    /// Number of frames to render
+    #[clap(short = 'c', long, value_parser, default_value_t = 100)]
+    frame_count: usize,
+
+    /// Index of first frame to render
+    #[clap(short = 'i', long, value_parser, default_value_t = 0)]
+    frame_initial: usize,
+
+    /// Playback frame rate for final image
+    #[clap(short = 'r', long, value_parser, default_value_t = 25)]
+    frame_rate: usize,
+
+    /// Samples to take per pixel
+    #[clap(short, long, value_parser, default_value_t = 1000)]
+    samples_per_pixel: usize,
+
+    /// Render thread count
+    #[clap(short, long, value_parser, default_value_t = 16)]
+    thread_count: usize,
+
+    /// output file name
+    #[clap(short = 'o', long, value_parser, default_value_t = String::from("final.gif"))]
+    final_out_name: String,
+ } 
+
 fn main() {
+    // Parse CLI args
+    let args = Args::parse();
+    let image_width: usize = args.width;
+    let image_height: usize = args.height;
+    let frame_count: usize = args.frame_count;
+    let frame_initial: usize = args.frame_initial;
+    let frame_rate: usize = args.frame_rate;
+    let samples_per_pixel: usize = args.samples_per_pixel;
+    let thread_count: usize = args.thread_count;
+    let out_name: String = args.final_out_name;
+
+    // Load some useful data
+    read_obj("icosa.obj");
+
     // Render loop
-    let image_width: usize = 640;
-    let image_height: usize = 480;
-    let frame_count: usize = 100;
-    let frame_rate: usize = 25;
-    let samples_per_pixel: usize = 50;
-
-    let half_width = image_width as Scalar / 2.0;
-    let inv_aspect = image_height as Scalar / image_width as Scalar;
-    let pixel_size = Vec2::new(1.0 / image_width as Scalar, 1.0 / image_height as Scalar);
-
-    let mut buffer = ImageBuffer::new(image_width, image_height);
-    for frame in 0..frame_count {
-        println!("Frame {} of {}: Rendering...", frame, frame_count);
-
+    let mut frames_done = 0;
+    let mut frames_todo = frame_count - frame_initial;
+    let mut total_time = 0.0;
+    for frame in frame_initial..frame_count {
+        println!("Frame {} of {}: Rendering...", frame + 1, frame_count);
+        let frame_start = SystemTime::now();
         let t = frame as Scalar / frame_count as Scalar;
         set_scene(t);
 
-        for x in 0..image_width {
-            for y in 0..image_height {
-                let mut pixel_accumulator = Vec3::new(0.0, 0.0, 0.0);
-                for sample in 0..samples_per_pixel {
-                    let screenspace_pos = Vec2::new(
-                        x as Scalar / half_width - 1.0 + pixel_size.x() * sample_unit(), 
-                        y as Scalar / half_width - inv_aspect + pixel_size.y() * sample_unit()
-                    );
-                    pixel_accumulator += pixel_col(screenspace_pos, t);
+        let mut data_buf = ImageBuffer::alloc_data_buf(image_width, image_height);
+        let mut buffer = ImageBuffer::new(image_width, image_height, &mut data_buf);
+        let sub_buffers = buffer.get_split_buffers(thread_count);
+
+        if thread_count > 1 {
+            crossbeam::scope(|scope| {
+                for sub_buffer in sub_buffers {
+                    scope.spawn(move |_| { render_slice(sub_buffer, samples_per_pixel, image_height); });
                 }
-                buffer.set_pixel(x, y, pixel_accumulator / samples_per_pixel as Scalar);
+            }).expect("Threading issue");
+        }
+        else {
+            for sub_buffer in sub_buffers {
+                render_slice(sub_buffer, samples_per_pixel, image_height);
             }
         }
 
-        println!("Frame {} of {}: Writing...", frame, frame_count);
+        let elapsed = frame_start.elapsed().expect("Time error").as_secs() as f32;
+        frames_done += 1;
+        frames_todo -= 1;
+        total_time += elapsed;
+        let estimated_left = (total_time as f32 / frames_done as f32) * frames_todo as f32 / 60.0;
+        println!("Finished {} samples in {} secs ({} sec/sample), estimated remaining: {} min", samples_per_pixel, elapsed, elapsed / samples_per_pixel as f32, estimated_left);
+
+        println!("Frame {} of {}: Writing...", frame + 1, frame_count);
+        buffer.tonemap_aces(0.6);
         buffer.write_bmp(&format!("out/render_{:06}.bmp", frame));
     }
 
@@ -235,9 +513,22 @@ fn main() {
         "-framerate", &frame_rate.to_string(),
         "-pattern_type", "glob",
         "-i", "out/render_*.bmp",
+        "-filter_complex", "[0:v] palettegen",
+        "-y",
+        "pal.png"
+    ]).output().expect("failed to execute ffmpeg");
+    Command::new("ffmpeg").args([
+        "-framerate", &frame_rate.to_string(),
+        "-pattern_type", "glob",
+        "-i", "out/render_*.bmp",
+        "-i", "pal.png",
+        "-filter_complex", "[0:v][1:v] paletteuse",
         "-f", "gif",
         "-y",
         "render.gif"
     ]).output().expect("failed to execute ffmpeg");
+    
+    println!("Calling gifsicle for gif compression...");
+    Command::new("gifsicle").args(["-O3", "render.gif", "-o", &out_name]).output().expect("failed to execute gifsicle");
 }
 
