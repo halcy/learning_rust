@@ -9,8 +9,7 @@ pub struct TriData {
 
 // Opinionated obj reader
 // t/l note: opinionated means i implement only a subset and make various assumptions that may not hold in reality
-pub fn read_obj(path: &str) -> Vec<TriData> {
-    let contents = fs::read_to_string(path).expect("File read error");
+pub fn parse_obj(contents: &str) -> Vec<TriData> {
     let mut vertices: Vec<Vec3> = Vec::new();
     let mut normals: Vec<Vec3> = Vec::new(); 
     let mut triangles: Vec<TriData> = Vec::new();
@@ -55,4 +54,9 @@ pub fn read_obj(path: &str) -> Vec<TriData> {
         }
     }
     return triangles;
+}
+
+pub fn read_obj(path: &str) -> Vec<TriData> {
+    let contents = fs::read_to_string(path).expect("File read error");
+    return parse_obj(&contents);
 }

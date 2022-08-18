@@ -6,7 +6,6 @@ use rand::Rng;
 use crossbeam;
 use obj_reader::{*};
 use lazy_static::lazy_static;
-use std::time::{SystemTime};
 
 fn sample_unit() -> f32 {
     let mut rng = rand::thread_rng();
@@ -289,7 +288,7 @@ fn trace(origin: Vec3, ray: Vec3, cont_prob: f32) -> Color {
     }
     
     // Now, shade (possibly recurse)
-    let mut col = Color::new(0.2, 0.2, 0.2) * (ray & Vec3::new(0.0, 0.0, 1.0)).powf(4.0);
+    let mut col = Color::new(1.1, 1.1, 1.1) * (ray & Vec3::new(0.0, 0.0, 1.0)).powf(4.0);
     if !best_object.is_none() {
         let best_object = best_object.unwrap();
         col = best_object.shade(best_hit, cont_prob)
@@ -313,9 +312,10 @@ fn pixel_col(pos: Vec2) -> Color {
 }
 
 // Load icosahedron object
-/*lazy_static! {
-    static ref ICOSAHEDRON: Vec<TriData> = read_obj("icosa.obj"); // TODO learn to read?
-}*/
+static ICOSAHEDRON_TEXT: &'static str = include_str!("../icosa.obj");
+lazy_static! {
+    static ref ICOSAHEDRON: Vec<TriData> = parse_obj(ICOSAHEDRON_TEXT);
+}
 
 // Update scene stored in SCENE variable
 static mut SCENE: Vec<Box<dyn Object>> = Vec::<Box<dyn Object>>::new();
@@ -347,7 +347,6 @@ fn set_scene(t: Scalar) {
         }
     }
 
-    /*
     let emit_ramp = ((0.1 - (t % 0.25)).max(0.0) / 0.1).powf(5.0);
     let icosa_shift: Vec3 = Vec3::new(0.0, -0.25 + (t * 2.0 * PI).cos() * 2.0, 0.0);
     unsafe {
@@ -381,7 +380,7 @@ fn set_scene(t: Scalar) {
                 n2: tri_data.n[1],
                 n3: tri_data.n[2],
                 bsdf: BSDF{
-                    albedo: Color::new(1.0, 1.0, 1.0),
+                    albedo: Color::new(0.97, 0.97, 0.97),
                     emission: Color::new(2.0, 2.0, 2.0) * emit_ramp,
                     specularity: 40.0,
                     reflectivity: 1.0 - emit_ramp * 0.8,
@@ -390,7 +389,7 @@ fn set_scene(t: Scalar) {
                 bvh_skip: 0,
             }));
         }
-    }*/
+    }
 }
 // Thread render worker
 fn render_slice(mut sub_buffer: ImageBuffer, samples_per_pixel: usize, full_height: usize) {
@@ -423,11 +422,11 @@ extern {
 pub fn render_image(frame_x: i32) -> Vec<u8> {
     // Render loop
     let thread_count = 1;
-    let samples_per_pixel = 100;
+    let samples_per_pixel = 40;
     let frame_count = 100;
     let frame = frame_count - frame_x - 1;
-    let image_width = 320;
-    let image_height = 240;
+    let image_width = 200;
+    let image_height = 150;
 
     let t = frame as Scalar / frame_count as Scalar;
     set_scene(t);
