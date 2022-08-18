@@ -1,10 +1,9 @@
+use wasm_bindgen::prelude::*;
 use vector_math::{*};
 use image_buffer::{ImageBuffer, Color};
 use std::f32::consts::PI;
-use std::process::Command;
 use rand::Rng;
 use crossbeam;
-use clap::{Parser};
 use obj_reader::{*};
 use lazy_static::lazy_static;
 use std::time::{SystemTime};
@@ -314,9 +313,9 @@ fn pixel_col(pos: Vec2) -> Color {
 }
 
 // Load icosahedron object
-lazy_static! {
-    static ref ICOSAHEDRON: Vec<TriData> = read_obj("icosa.obj");
-}
+/*lazy_static! {
+    static ref ICOSAHEDRON: Vec<TriData> = read_obj("icosa.obj"); // TODO learn to read?
+}*/
 
 // Update scene stored in SCENE variable
 static mut SCENE: Vec<Box<dyn Object>> = Vec::<Box<dyn Object>>::new();
@@ -346,13 +345,41 @@ fn set_scene(t: Scalar) {
                 bvh_skip: 0,
             }));
         }
+    }
 
-        let emit_ramp = ((0.1 - (t % 0.25)).max(0.0) / 0.1).powf(5.0);
-        let icosa_shift: Vec3 = Vec3::new(0.0, -0.25 + (t * 2.0 * PI).cos() * 2.0, 0.0);
-        unsafe {
-            SCENE.push(Box::new(Sphere{ 
-                c: icosa_shift,
-                r: 2.4,
+    /*
+    let emit_ramp = ((0.1 - (t % 0.25)).max(0.0) / 0.1).powf(5.0);
+    let icosa_shift: Vec3 = Vec3::new(0.0, -0.25 + (t * 2.0 * PI).cos() * 2.0, 0.0);
+    unsafe {
+        SCENE.push(Box::new(Sphere{ 
+            c: icosa_shift,
+            r: 2.4,
+            bsdf: BSDF{
+                albedo: Color::new(1.0, 1.0, 1.0),
+                emission: Color::new(2.0, 2.0, 2.0) * emit_ramp,
+                specularity: 40.0,
+                reflectivity: 1.0 - emit_ramp * 0.8,
+                transmittance: 1.0,
+            },
+            bvh_skip: 180,
+        }));
+    }
+
+    let icosa_scale: Scalar = 1.8;
+    let icosa_rot: Mat3x3 = Mat3x3::new(
+            (t * 2.0 * PI).cos(), 0.0, (t * 2.0 * PI).sin(),
+            0.0, 1.0, 0.0,
+        -(t * 2.0 * PI).sin(), 0.0, (t * 2.0 * PI).cos(),
+    );
+    unsafe {
+        for tri_data in ICOSAHEDRON.iter() {
+            SCENE.push(Box::new(Triangle{ 
+                p1: (tri_data.p[0] * icosa_scale + icosa_shift) | icosa_rot,
+                p2: (tri_data.p[1] * icosa_scale + icosa_shift) | icosa_rot,
+                p3: (tri_data.p[2] * icosa_scale + icosa_shift) | icosa_rot,
+                n1: tri_data.n[0],
+                n2: tri_data.n[1],
+                n3: tri_data.n[2],
                 bsdf: BSDF{
                     albedo: Color::new(1.0, 1.0, 1.0),
                     emission: Color::new(2.0, 2.0, 2.0) * emit_ramp,
@@ -360,37 +387,10 @@ fn set_scene(t: Scalar) {
                     reflectivity: 1.0 - emit_ramp * 0.8,
                     transmittance: 1.0,
                 },
-                bvh_skip: 180,
+                bvh_skip: 0,
             }));
         }
-
-        let icosa_scale: Scalar = 1.8;
-        let icosa_rot: Mat3x3 = Mat3x3::new(
-             (t * 2.0 * PI).cos(), 0.0, (t * 2.0 * PI).sin(),
-             0.0, 1.0, 0.0,
-            -(t * 2.0 * PI).sin(), 0.0, (t * 2.0 * PI).cos(),
-        );
-        unsafe {
-            for tri_data in ICOSAHEDRON.iter() {
-                SCENE.push(Box::new(Triangle{ 
-                    p1: (tri_data.p[0] * icosa_scale + icosa_shift) | icosa_rot,
-                    p2: (tri_data.p[1] * icosa_scale + icosa_shift) | icosa_rot,
-                    p3: (tri_data.p[2] * icosa_scale + icosa_shift) | icosa_rot,
-                    n1: tri_data.n[0],
-                    n2: tri_data.n[1],
-                    n3: tri_data.n[2],
-                    bsdf: BSDF{
-                        albedo: Color::new(1.0, 1.0, 1.0),
-                        emission: Color::new(2.0, 2.0, 2.0) * emit_ramp,
-                        specularity: 40.0,
-                        reflectivity: 1.0 - emit_ramp * 0.8,
-                        transmittance: 1.0,
-                    },
-                    bvh_skip: 0,
-                }));
-            }
-        }
-    }
+    }*/
 }
 // Thread render worker
 fn render_slice(mut sub_buffer: ImageBuffer, samples_per_pixel: usize, full_height: usize) {
@@ -414,122 +414,43 @@ fn render_slice(mut sub_buffer: ImageBuffer, samples_per_pixel: usize, full_heig
     }
 }
 
-#[derive(Parser)]
-#[clap(name = "TinyRustPT")]
-#[clap(author = "Lorenz Diener <lorenzd@gmail.com>")]
-#[clap(version = "0.1.0")]
-#[clap(about = "Traces paths a bunch, using Rust!", long_about = None)]
-struct Args {
-    /// Output image width
-    #[clap(short, long, value_parser, default_value_t = 640)]
-    width: usize,
+#[wasm_bindgen]
+extern {
+    pub fn alert(s: &str);
+}
 
-    /// Output image height
-    #[clap(short, long, value_parser, default_value_t = 480)]
-    height: usize,
-
-    /// Number of frames to render
-    #[clap(short = 'c', long, value_parser, default_value_t = 100)]
-    frame_count: usize,
-
-    /// Index of first frame to render
-    #[clap(short = 'i', long, value_parser, default_value_t = 0)]
-    frame_initial: usize,
-
-    /// Playback frame rate for final image
-    #[clap(short = 'r', long, value_parser, default_value_t = 25)]
-    frame_rate: usize,
-
-    /// Samples to take per pixel
-    #[clap(short, long, value_parser, default_value_t = 1000)]
-    samples_per_pixel: usize,
-
-    /// Render thread count
-    #[clap(short, long, value_parser, default_value_t = 16)]
-    thread_count: usize,
-
-    /// output file name
-    #[clap(short = 'o', long, value_parser, default_value_t = String::from("final.gif"))]
-    final_out_name: String,
- } 
-
-fn main() {
-    // Parse CLI args
-    let args = Args::parse();
-    let image_width: usize = args.width;
-    let image_height: usize = args.height;
-    let frame_count: usize = args.frame_count;
-    let frame_initial: usize = args.frame_initial;
-    let frame_rate: usize = args.frame_rate;
-    let samples_per_pixel: usize = args.samples_per_pixel;
-    let thread_count: usize = args.thread_count;
-    let out_name: String = args.final_out_name;
-
-    // Load some useful data
-    read_obj("icosa.obj");
-
+#[wasm_bindgen]
+pub fn render_image(frame_x: i32) -> Vec<u8> {
     // Render loop
-    let mut frames_done = 0;
-    let mut frames_todo = frame_count - frame_initial;
-    let mut total_time = 0.0;
-    for frame_x in frame_initial..frame_count {
-        let frame = frame_count - frame_x - 1;
-        println!("Frame {} of {}: Rendering...", frame + 1, frame_count);
-        let frame_start = SystemTime::now();
-        let t = frame as Scalar / frame_count as Scalar;
-        set_scene(t);
+    let thread_count = 1;
+    let samples_per_pixel = 100;
+    let frame_count = 100;
+    let frame = frame_count - frame_x - 1;
+    let image_width = 320;
+    let image_height = 240;
 
-        let mut data_buf = ImageBuffer::alloc_data_buf(image_width, image_height);
-        let mut buffer = ImageBuffer::new(image_width, image_height, &mut data_buf);
-        let sub_buffers = buffer.get_split_buffers(thread_count);
+    let t = frame as Scalar / frame_count as Scalar;
+    set_scene(t);
+    
+    let mut data_buf = ImageBuffer::alloc_data_buf(image_width, image_height);
+    let mut buffer = ImageBuffer::new(image_width, image_height, &mut data_buf);
+    let sub_buffers = buffer.get_split_buffers(thread_count);
 
-        if thread_count > 1 {
-            crossbeam::scope(|scope| {
-                for sub_buffer in sub_buffers {
-                    scope.spawn(move |_| { render_slice(sub_buffer, samples_per_pixel, image_height); });
-                }
-            }).expect("Threading issue");
-        }
-        else {
+
+    if thread_count > 1 {
+        crossbeam::scope(|scope| {
             for sub_buffer in sub_buffers {
-                render_slice(sub_buffer, samples_per_pixel, image_height);
+                scope.spawn(move |_| { render_slice(sub_buffer, samples_per_pixel, image_height); });
             }
+        }).expect("Threading issue");
+    }
+    else {
+        for sub_buffer in sub_buffers {
+            render_slice(sub_buffer, samples_per_pixel, image_height);
         }
-
-        let elapsed = frame_start.elapsed().expect("Time error").as_secs() as f32;
-        frames_done += 1;
-        frames_todo -= 1;
-        total_time += elapsed;
-        let estimated_left = (total_time as f32 / frames_done as f32) * frames_todo as f32 / 60.0;
-        println!("Finished {} samples in {} secs ({} sec/sample), estimated remaining: {} min", samples_per_pixel, elapsed, elapsed / samples_per_pixel as f32, estimated_left);
-
-        println!("Frame {} of {}: Writing...", frame + 1, frame_count);
-        buffer.tonemap_aces(0.6);
-        buffer.write_bmp(&format!("out/render_{:06}.bmp", frame));
     }
 
-    // Transform BMPs to gif
-    println!("Calling ffmpeg for gif generation...");
-    Command::new("ffmpeg").args([
-        "-framerate", &frame_rate.to_string(),
-        "-pattern_type", "glob",
-        "-i", "out/render_*.bmp",
-        "-filter_complex", "[0:v] palettegen",
-        "-y",
-        "pal.png"
-    ]).output().expect("failed to execute ffmpeg");
-    Command::new("ffmpeg").args([
-        "-framerate", &frame_rate.to_string(),
-        "-pattern_type", "glob",
-        "-i", "out/render_*.bmp",
-        "-i", "pal.png",
-        "-filter_complex", "[0:v][1:v] paletteuse",
-        "-f", "gif",
-        "-y",
-        "render.gif"
-    ]).output().expect("failed to execute ffmpeg");
-    
-    println!("Calling gifsicle for gif compression...");
-    Command::new("gifsicle").args(["-O3", "render.gif", "-o", &out_name]).output().expect("failed to execute gifsicle");
+    buffer.tonemap_aces(0.2);
+    return buffer.get_rgb8_buffer();
 }
 
